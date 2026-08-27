@@ -1,0 +1,167 @@
+{
+  "app_name": "ReturnRide",
+  "personality": "2 Material You / Expressive LIGHT",
+  "personality_one_liner": "A trustworthy, highly accessible, and warm utility that feels inherently Indian and grounded in earthy tones.",
+  "color": {
+    "surface": "#FDFBF7",
+    "onSurface": "#2C2A28",
+    "surfaceSecondary": "#F2EBE1",
+    "onSurfaceSecondary": "#3E3B38",
+    "surfaceTertiary": "#E5DAC9",
+    "onSurfaceTertiary": "#4A4743",
+    "surfaceInverse": "#2C2A28",
+    "onSurfaceInverse": "#FDFBF7",
+    "brand": "#C1513A",
+    "brandPrimary": "#C1513A",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#D49A36",
+    "onBrandSecondary": "#2C2A28",
+    "brandTertiary": "#D2D8C9",
+    "onBrandTertiary": "#2C2A28",
+    "success": "#477A47",
+    "onSuccess": "#FFFFFF",
+    "warning": "#D49A36",
+    "onWarning": "#2C2A28",
+    "error": "#B23A3A",
+    "onError": "#FFFFFF",
+    "info": "#6B8E6B",
+    "onInfo": "#FFFFFF",
+    "border": "#E5DAC9",
+    "borderStrong": "#C1513A",
+    "divider": "#E5DAC9"
+  },
+  "typography": {
+    "displayFontFamily": "Plus Jakarta Sans",
+    "textFontFamily": "Figtree",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous spacing. Maintain at least 16px (lg) padding for standard containers, and use 24px (xl) for section separation to accommodate rural users who need clear, uncrowded tap areas. Buttons must have large internal padding.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": "1",
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": false,
+    "do's": [],
+    "dont's": [
+      "Avoid glassmorphism completely. This app targets 2G/3G low-end Android devices in rural areas. Use solid surfaceSecondary and tonal elevation to ensure performant rendering."
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "solid surfaceSecondary",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler",
+    "maps": "react-native-maps"
+  },
+  "haptics": {
+    "events": {
+      "primary_action": "medium",
+      "tab_change": "light",
+      "toggle_switch": "light",
+      "match_found": "success",
+      "error_alert": "error"
+    }
+  },
+  "screens": [
+    {
+      "name": "Auth / Role Selection",
+      "purpose": "Allow users to onboard seamlessly by choosing their role (Passenger or Driver) and authenticating via Phone.",
+      "states": {
+        "loading": "Spinner overlaid on full-bleed background.",
+        "empty": "N/A",
+        "error": "Error toast with a 'Retry' action for failed OTPs."
+      },
+      "layout": "Hero image (splash_background) taking up top 50% of the screen with a top-to-bottom dark gradient scrim. The bottom 50% is a large rounded surfaceSecondary sheet containing large Role selection buttons (brandPrimary for Passenger, brandSecondary for Driver) and phone input field. Clear, readable fonts."
+    },
+    {
+      "name": "Passenger Home",
+      "purpose": "Primary booking interface where passengers enter their village and destination town to find return rides.",
+      "states": {
+        "loading": "Map loads with skeleton UI for the bottom sheet.",
+        "empty": "Bottom sheet shows an empty state if no recent searches exist.",
+        "error": "Map overlay showing offline status if 2G drops."
+      },
+      "layout": "Full-screen MapView. Top overlay contains an address search input bar. A bottom-anchored @gorhom/bottom-sheet contains the 'Where to?' input fields (Village A to Town), recent landmarks, and a large sticky 'Find Rides' button. Avoid visual clutter over the map."
+    },
+    {
+      "name": "Ride Matches (Passenger)",
+      "purpose": "Display available return-rides matching the passenger's route.",
+      "states": {
+        "loading": "List of skeleton cards mimicking driver matches.",
+        "empty": "Illustration (empty_rides) indicating no matches with a short, polite message. Large 'Notify Me' primary CTA.",
+        "error": "Error message with a large 'Tap to Retry' button."
+      },
+      "layout": "Single-column list of driver cards. Each card must fill horizontal space (minus padding), using surfaceSecondary background. Cards show driver vehicle, ETA, and a bold fare displaying the 'return-trip discount'. A large 'Book' pill button on each card."
+    },
+    {
+      "name": "Driver Home (Publish Route)",
+      "purpose": "Allow drivers to input their return leg details (empty leg) to find passengers.",
+      "states": {
+        "loading": "Centered spinner while publishing route.",
+        "empty": "N/A",
+        "error": "Failed to publish error with Retry button."
+      },
+      "layout": "Form-based layout. Inputs for origin village, destination town, time window, and seats available. Inputs have labels above them. A large Carbon savings tracker (CO2 saved) is displayed at the top as a brandTertiary tinted card. 'Publish Route' CTA sticky at bottom inside KeyboardAvoidingView."
+    },
+    {
+      "name": "Active Ride Tracking",
+      "purpose": "Live tracker for both Passenger and Driver to manage the lifecycle of the ride and view ETA.",
+      "states": {
+        "loading": "Map loading overlay.",
+        "empty": "N/A",
+        "error": "Offline indicator with last-known-location timestamp."
+      },
+      "layout": "Map view taking up top 60%. Bottom 40% is a persistent bottom sheet containing driver/passenger details (initials avatar fallback if no photo), live ETA in bold, and quick-action icon buttons (Call, Chat, SOS). The SOS button uses the 'error' red token. Large swipe-to-complete or tap-to-complete primary action for the driver."
+    }
+  ],
+  "images": {
+    "splash_background": {
+      "url": "https://images.unsplash.com/photo-1708884831398-b9b7cca1b2ba?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA0MTJ8MHwxfHNlYXJjaHwzfHxpbmRpYW4lMjBhdXRvJTIwcmlja3NoYXclMjByb2FkfGVufDB8fHx8MTc4Nzg0NzA5MHww&ixlib=rb-4.1.0&q=85",
+      "alt": "Indian auto rickshaws on street"
+    },
+    "empty_rides": {
+      "url": "https://images.unsplash.com/photo-1596361803154-857df2de0a2c?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODh8MHwxfHNlYXJjaHwzfHxlbXB0eSUyMHJ1cmFsJTIwcm9hZCUyMGxhbmRzY2FwZXxlbnwwfHx8fDE3ODc4NDcwOTB8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Empty rural road landscape"
+    },
+    "onboarding_scene": {
+      "url": "https://images.unsplash.com/photo-1672221691680-188756d29bf2?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NjZ8MHwxfHNlYXJjaHwxfHxncmVlbiUyMHZpbGxhZ2UlMjByb2FkJTIwdHJlZXxlbnwwfHx8fDE3ODc4NDcwOTB8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Rural walking path with people"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Strictly adhere to the earthy palette (Terracotta, Ochre, Sage) as defined. Absolutely no blues or purples anywhere in the app, including default system link colors or map markers.",
+    "Accessibility is priority #1. Ensure all touch targets are at least 48x48pt. Use 'base' (14pt) and 'lg' (16pt) heavily for text; do not use 'sm' (12pt) for anything critical since target users may have poor eyesight or smaller screens.",
+    "Disable glassmorphism/blurs completely. Use solid `surfaceSecondary` with `shadow_tier` 1 (or tonal elevation) for bottom sheets, cards, and tab bars to maintain performance on low-end 2G/3G Android devices.",
+    "For the Ride Tracking / Home screens, use a full-bleed react-native-maps view with a bottom-anchored @gorhom/bottom-sheet. Research from Mobbin confirms this is the optimal layout for contextual mobility apps.",
+    "Implement the 'gradient-to-dark scrim pattern' over the `splash_background` image to ensure the overlay text and authentication buttons have WCAG AA contrast.",
+    "For avatars, default to initials (e.g., 'RD') inside a circular `brandTertiary` container if no image is available. Use Phosphor icons consistently with filled variants for active states and outlined for inactive.",
+    "Ensure 'Submit', 'Find Rides', and 'Publish' CTAs are sticky at the bottom of the screen (respecting safe areas) or inside KeyboardAvoidingView."
+  ]
+}
