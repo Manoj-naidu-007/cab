@@ -12,6 +12,9 @@ from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Literal
 
 import jwt
+import hmac
+import hashlib
+import requests
 from jwt.exceptions import InvalidTokenError
 from passlib.context import CryptContext
 from pydantic import BaseModel, Field
@@ -39,6 +42,12 @@ BASE_FARE = 20.0          # flat pickup charge (INR)
 RATE_PER_KM = 12.0        # INR per km one-way
 RETURN_DISCOUNT = 0.25    # 25% off on the empty return leg
 CO2_PER_KM = 0.121        # kg CO2 saved per km of filled empty leg
+POOL_DISCOUNT = 0.12      # extra discount when sharing the ride with others
+
+# Razorpay (optional — falls back to demo payments when unset)
+RAZORPAY_KEY_ID = os.environ.get('RAZORPAY_KEY_ID', '').strip()
+RAZORPAY_KEY_SECRET = os.environ.get('RAZORPAY_KEY_SECRET', '').strip()
+RAZORPAY_ENABLED = bool(RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET)
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -163,6 +172,7 @@ class PublishRideIn(BaseModel):
     vehicle_type: str = "Auto"
     notes: Optional[str] = None
     women_only: bool = False
+    recurring: bool = False       # daily commute
 
 
 class MatchIn(BaseModel):
@@ -178,6 +188,25 @@ class BookIn(BaseModel):
     drop_village_id: str
     seats: int = 1
     payment_mode: Literal["upi", "cash", "wallet"] = "upi"
+    want_pool: bool = True        # willing to share ride for extra discount
+    scheduled_time: Optional[str] = None
+    recurring: bool = False       # daily commute
+
+
+class LocationIn(BaseModel):
+    lat: float
+    lng: float
+
+
+class OrderIn(BaseModel):
+    booking_id: str
+
+
+class VerifyIn(BaseModel):
+    booking_id: str
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
 
 
 class StatusIn(BaseModel):
@@ -404,6 +433,7 @@ async def publish_ride(data: PublishRideIn, user=Depends(get_current_user)):
         "per_seat_fare": return_fare(dist),
         "women_only": data.women_only,
         "notes": data.notes,
+        "recurring": data.recurring,
         "status": "open",
         "deleted_at": None,
         "created_at": now_utc().isoformat(),
@@ -504,6 +534,12 @@ async def match_rides(data: MatchIn):
         leg_km = haversine_km(oy, ox, dy, dx)
         seat_fare = return_fare(leg_km) if leg_km > 0.3 else r["per_seat_fare"]
 
+        # pooling: how many passengers already confirmed on this return leg
+        others = await db.bookings.count_documents(
+            {"ride_id": r["id"], "status": {"$in": ["accepted", "en_route", "in_progress", "completed"]},
+             "deleted_at": None})
+        pool_fare = round(seat_fare * (1 - POOL_DISCOUNT)) if others > 0 else seat_fare
+
         score = round(0.45 * route_score + 0.30 * time_score + 0.15 * rating_score + 0.10, 3)
 
         results.append({
@@ -514,7 +550,10 @@ async def match_rides(data: MatchIn):
             "leg_distance_km": round(leg_km, 1),
             "one_way_fare": one_way_fare(leg_km),
             "return_fare": seat_fare,
-            "you_save": one_way_fare(leg_km) - seat_fare,
+            "pool_fare": pool_fare,
+            "others_joined": others,
+            "is_shared": others > 0,
+            "you_save": one_way_fare(leg_km) - pool_fare,
             "co2_saved_kg": round(leg_km * CO2_PER_KM, 2),
             "pickup_name": px_o["name"],
             "drop_name": px_d["name"],
@@ -545,7 +584,15 @@ async def create_booking(data: BookIn, user=Depends(get_current_user)):
     pickup = await get_village(data.pickup_village_id)
     drop = await get_village(data.drop_village_id)
     leg_km = haversine_km(pickup["lat"], pickup["lng"], drop["lat"], drop["lng"])
-    fare = (return_fare(leg_km) if leg_km > 0.3 else ride["per_seat_fare"]) * data.seats
+    base_seat = return_fare(leg_km) if leg_km > 0.3 else ride["per_seat_fare"]
+
+    # Pooling: if others already confirmed on this leg and passenger opts in, share the savings.
+    others = await db.bookings.count_documents(
+        {"ride_id": ride["id"], "status": {"$in": ["accepted", "en_route", "in_progress", "completed"]},
+         "deleted_at": None})
+    pool_applied = bool(data.want_pool and others > 0)
+    seat_fare = round(base_seat * (1 - POOL_DISCOUNT)) if pool_applied else base_seat
+    fare = seat_fare * data.seats
 
     booking = {
         "id": new_id(),
@@ -567,6 +614,10 @@ async def create_booking(data: BookIn, user=Depends(get_current_user)):
         "payment_mode": data.payment_mode,
         "payment_status": "pending",
         "status": "requested",
+        "want_pool": data.want_pool,
+        "pool_applied": pool_applied,
+        "scheduled_time": data.scheduled_time or ride.get("departure_time"),
+        "recurring": data.recurring,
         "rated": False,
         "cancel_reason": None,
         "deleted_at": None,
@@ -644,7 +695,8 @@ async def update_booking_status(booking_id: str, body: StatusIn, user=Depends(ge
                                   {"$inc": {"seats_available": b["seats"]},
                                    "$set": {"status": "open"}})
     if new_status == "completed":
-        updates["payment_status"] = "paid"
+        if b.get("payment_mode") == "cash":
+            updates["payment_status"] = "paid"
         await db.users.update_one({"id": b["driver_id"]}, {"$inc": {"rides_count": 1}})
         await db.users.update_one({"id": b["passenger_id"]}, {"$inc": {"rides_count": 1}})
 
@@ -665,6 +717,95 @@ async def demo_payment(body: dict, user=Depends(get_current_user)):
     )
     return {"success": True, "transaction_id": f"DEMO-{new_id()[:8].upper()}",
             "amount": b["fare"], "status": "paid"}
+
+
+# ---------------------------------------------------------------------------
+# Razorpay payments (real) — auto-enabled when keys are present in .env
+# ---------------------------------------------------------------------------
+@api_router.get("/payments/config")
+async def payment_config():
+    return {"provider": "razorpay" if RAZORPAY_ENABLED else "demo",
+            "enabled": RAZORPAY_ENABLED,
+            "key_id": RAZORPAY_KEY_ID if RAZORPAY_ENABLED else None}
+
+
+@api_router.post("/payments/order")
+async def create_order(data: OrderIn, user=Depends(get_current_user)):
+    if not RAZORPAY_ENABLED:
+        raise HTTPException(400, "Razorpay is not configured")
+    b = await db.bookings.find_one({"id": data.booking_id, "deleted_at": None})
+    if not b or b["passenger_id"] != user["id"]:
+        raise HTTPException(404, "Booking not found")
+    amount = int(round(b["fare"])) * 100  # paise, server-side amount
+    receipt = f"rr_{b['id'][:20]}"
+    try:
+        resp = requests.post(
+            "https://api.razorpay.com/v1/orders",
+            json={"amount": amount, "currency": "INR", "receipt": receipt,
+                  "payment_capture": 1, "notes": {"booking_id": b["id"]}},
+            auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET), timeout=15)
+    except requests.RequestException:
+        raise HTTPException(502, "Payment gateway unreachable")
+    if resp.status_code >= 400:
+        logger.error("Razorpay order error: %s", resp.text)
+        raise HTTPException(502, "Could not create payment order")
+    order = resp.json()
+    await db.bookings.update_one({"id": b["id"]}, {"$set": {"razorpay_order_id": order["id"]}})
+    return {"key_id": RAZORPAY_KEY_ID, "order_id": order["id"],
+            "amount": amount, "currency": "INR", "booking_id": b["id"]}
+
+
+@api_router.post("/payments/verify")
+async def verify_payment(data: VerifyIn, user=Depends(get_current_user)):
+    if not RAZORPAY_ENABLED:
+        raise HTTPException(400, "Razorpay is not configured")
+    b = await db.bookings.find_one({"id": data.booking_id, "deleted_at": None})
+    if not b or b["passenger_id"] != user["id"]:
+        raise HTTPException(404, "Booking not found")
+    expected = hmac.new(
+        RAZORPAY_KEY_SECRET.encode(),
+        f"{data.razorpay_order_id}|{data.razorpay_payment_id}".encode(),
+        hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, data.razorpay_signature):
+        raise HTTPException(400, "Invalid payment signature")
+    await db.bookings.update_one(
+        {"id": b["id"], "payment_status": {"$ne": "paid"}},
+        {"$set": {"payment_status": "paid", "payment_mode": "upi",
+                  "razorpay_payment_id": data.razorpay_payment_id}})
+    return {"success": True, "status": "paid"}
+
+
+# ---------------------------------------------------------------------------
+# Live driver location + pooling info
+# ---------------------------------------------------------------------------
+@api_router.post("/bookings/{booking_id}/location")
+async def update_location(booking_id: str, body: LocationIn, user=Depends(get_current_user)):
+    b = await db.bookings.find_one({"id": booking_id, "deleted_at": None})
+    if not b or b["driver_id"] != user["id"]:
+        raise HTTPException(403, "Only the assigned driver can share location")
+    await db.bookings.update_one(
+        {"id": booking_id},
+        {"$set": {"driver_lat": body.lat, "driver_lng": body.lng,
+                  "driver_loc_at": now_utc().isoformat()}})
+    return {"success": True}
+
+
+@api_router.get("/bookings/{booking_id}/pool")
+async def booking_pool(booking_id: str, user=Depends(get_current_user)):
+    b = await db.bookings.find_one({"id": booking_id, "deleted_at": None})
+    if not b or user["id"] not in (b["passenger_id"], b["driver_id"]):
+        raise HTTPException(404, "Booking not found")
+    riders = await db.bookings.find(
+        {"ride_id": b["ride_id"],
+         "status": {"$in": ["accepted", "en_route", "in_progress", "completed"]},
+         "deleted_at": None},
+        {"_id": 0, "passenger_name": 1, "pickup_name": 1, "drop_name": 1, "seats": 1},
+    ).to_list(20)
+    ride = await db.rides.find_one({"id": b["ride_id"]}, {"_id": 0})
+    return {"count": len(riders), "riders": riders,
+            "seats_total": ride.get("seats_total") if ride else None,
+            "seats_available": ride.get("seats_available") if ride else None}
+
 
 
 # ---------------------------------------------------------------------------

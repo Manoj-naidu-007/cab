@@ -36,6 +36,17 @@ Core differentiator: matching on return-route overlap, not point-to-point proxim
 - [x] Real map (native) + web fallback; seeded demo drivers with live open rides
 - Verified: 29/29 backend tests pass; frontend E2E flow validated
 
+### Iteration 2 (2026-06)
+- [x] Ride Pooling: multiple passengers share the same return leg; extra 12% pool discount; shared-ride banner + co-rider roster (/bookings/{id}/pool)
+- [x] Advance Booking: ScheduleField (Leave now / Schedule Today-Tomorrow-day3 + hourly time) and recurring daily-commute toggle (passenger + driver)
+- [x] Razorpay payments: config-gated (GET /payments/config); real WebView/checkout flow (native + web) + order/verify endpoints with HMAC signature check; auto-activates when RAZORPAY_KEY_ID/SECRET are set, demo fallback otherwise
+- [x] Live driver location tracking: driver shares GPS while en_route/in_progress (expo-location + permission handling), passenger sees driver marker on map
+- Verified: iteration 2 backend + frontend tested and passing (UPI now paid explicitly, not auto on completion)
+
+## Pending inputs from user
+- Razorpay Test Key ID + Secret (paste into backend .env RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET) to switch payments from demo to real
+- Google Maps API key to get live road tiles on Android (iOS uses Apple Maps by default); paste it and wire ios.config.googleMapsApiKey / android.config.googleMaps.apiKey
+
 ## Backlog / Remaining
 ### P1
 - Razorpay real payment integration (needs Key ID + Secret from user)

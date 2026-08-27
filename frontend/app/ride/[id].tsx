@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Linking,
@@ -14,10 +14,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useLocalSearchParams, useRouter, Redirect } from "expo-router";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import * as Location from "expo-location";
 
 import { colors, fonts, fontSize, radius, spacing, shadow } from "@/src/theme";
 import { Avatar, Button, Card } from "@/src/components/ui";
 import { RouteMap } from "@/src/components/RouteMap";
+import { RazorpayCheckout, RazorpayOrder } from "@/src/components/RazorpayCheckout";
 import { api } from "@/src/api";
 import { useAuth } from "@/src/auth/AuthContext";
 import { useVillages } from "@/src/hooks/useVillages";
@@ -44,6 +46,11 @@ interface Booking {
   payment_status: string;
   status: string;
   rated: boolean;
+  driver_lat?: number;
+  driver_lng?: number;
+  scheduled_time?: string;
+  recurring?: boolean;
+  pool_applied?: boolean;
 }
 
 const STEPS = ["requested", "accepted", "en_route", "in_progress", "completed"];
@@ -70,7 +77,12 @@ export default function RideTracking() {
   const [showRate, setShowRate] = useState(false);
   const [rateScore, setRateScore] = useState(5);
   const [rateComment, setRateComment] = useState("");
+  const [payProvider, setPayProvider] = useState<"demo" | "razorpay">("demo");
+  const [order, setOrder] = useState<RazorpayOrder | null>(null);
+  const [rzpVisible, setRzpVisible] = useState(false);
+  const [poolInfo, setPoolInfo] = useState<{ count: number; riders: any[] } | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const watchRef = useRef<Location.LocationSubscription | null>(null);
 
   const isDriver = user?.role === "driver";
 
@@ -78,12 +90,24 @@ export default function RideTracking() {
     try {
       const b = await api.get<Booking>(`/bookings/${id}`);
       setBooking(b);
+      try {
+        setPoolInfo(await api.get(`/bookings/${id}/pool`));
+      } catch {
+        /* ignore */
+      }
     } catch {
       /* ignore */
     } finally {
       setLoading(false);
     }
   }, [id]);
+
+  useEffect(() => {
+    api
+      .get<{ provider: "demo" | "razorpay" }>("/payments/config", false)
+      .then((c) => setPayProvider(c.provider))
+      .catch(() => setPayProvider("demo"));
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -94,6 +118,34 @@ export default function RideTracking() {
       };
     }, [load]),
   );
+
+  // Driver shares live location while the ride is active.
+  const bookingStatus = booking?.status;
+  useEffect(() => {
+    let active = true;
+    const active_states = ["en_route", "in_progress"];
+    async function start() {
+      if (!isDriver || !bookingStatus || !active_states.includes(bookingStatus)) return;
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted" || !active) return;
+      watchRef.current = await Location.watchPositionAsync(
+        { accuracy: Location.Accuracy.Balanced, distanceInterval: 30, timeInterval: 8000 },
+        (loc) => {
+          api
+            .post(`/bookings/${id}/location`, { lat: loc.coords.latitude, lng: loc.coords.longitude })
+            .catch(() => {});
+        },
+      );
+    }
+    start();
+    return () => {
+      active = false;
+      if (watchRef.current) {
+        watchRef.current.remove();
+        watchRef.current = null;
+      }
+    };
+  }, [isDriver, bookingStatus, id]);
 
   const act = async (status: string, reason?: string) => {
     setActing(true);
@@ -109,7 +161,8 @@ export default function RideTracking() {
     }
   };
 
-  const pay = async (mode: string) => {
+  // Demo payment (fallback when Razorpay keys are not configured).
+  const payDemo = async (mode: string) => {
     setActing(true);
     try {
       await api.post("/payments/demo", { booking_id: id, mode });
@@ -120,6 +173,36 @@ export default function RideTracking() {
       toast.show(e.message || "Payment failed", "error");
     } finally {
       setActing(false);
+    }
+  };
+
+  // Real Razorpay payment.
+  const startRazorpay = async () => {
+    setActing(true);
+    try {
+      const o = await api.post<RazorpayOrder>("/payments/order", { booking_id: id });
+      setOrder(o);
+      setShowPay(false);
+      setRzpVisible(true);
+    } catch (e: any) {
+      toast.show(e.message || "Could not start payment", "error");
+    } finally {
+      setActing(false);
+    }
+  };
+
+  const onRazorpaySuccess = async (resp: {
+    razorpay_order_id: string;
+    razorpay_payment_id: string;
+    razorpay_signature: string;
+  }) => {
+    setRzpVisible(false);
+    try {
+      await api.post("/payments/verify", { booking_id: id, ...resp });
+      await load();
+      toast.show("Payment successful", "success");
+    } catch (e: any) {
+      toast.show(e.message || "Payment verification failed", "error");
     }
   };
 
@@ -151,13 +234,16 @@ export default function RideTracking() {
 
   const pickup = byId(booking.pickup_village_id);
   const drop = byId(booking.drop_village_id);
+  const isActive = ["accepted", "en_route", "in_progress"].includes(booking.status);
+  const showDriverLoc =
+    !isDriver && isActive && typeof booking.driver_lat === "number" && typeof booking.driver_lng === "number";
   const points = [
     pickup && { lat: pickup.lat, lng: pickup.lng, label: booking.pickup_name, kind: "origin" as const },
+    showDriverLoc && { lat: booking.driver_lat!, lng: booking.driver_lng!, label: "Driver", kind: "driver" as const },
     drop && { lat: drop.lat, lng: drop.lng, label: booking.drop_name, kind: "dest" as const },
   ].filter(Boolean) as any[];
 
   const stepIdx = STEPS.indexOf(booking.status);
-  const isActive = ["accepted", "en_route", "in_progress"].includes(booking.status);
   const otherName = isDriver ? booking.passenger_name : booking.driver_name;
   const otherPhone = booking.passenger_phone;
 
@@ -169,7 +255,12 @@ export default function RideTracking() {
       return (
         <View style={{ gap: spacing.md }}>
           {!isDriver && booking.payment_status !== "paid" && (
-            <Button testID="pay-button" label={`Pay ₹${booking.fare}`} onPress={() => setShowPay(true)} />
+            <Button
+              testID="pay-button"
+              label={`Pay ₹${booking.fare}${payProvider === "razorpay" ? " with UPI / Card" : ""}`}
+              loading={acting}
+              onPress={() => (payProvider === "razorpay" ? startRazorpay() : setShowPay(true))}
+            />
           )}
           {booking.payment_status === "paid" && (
             <View style={styles.paidRow}>
@@ -321,8 +412,53 @@ export default function RideTracking() {
           </View>
         </Card>
 
+        {(booking.recurring || booking.pool_applied) && (
+          <View style={styles.badgeRow}>
+            {booking.recurring && (
+              <View style={styles.miniBadge}>
+                <MaterialCommunityIcons name="repeat" size={14} color={colors.brandSecondary} />
+                <Text style={styles.miniBadgeText}>Daily commute</Text>
+              </View>
+            )}
+            {booking.pool_applied && (
+              <View style={styles.miniBadge}>
+                <MaterialCommunityIcons name="tag-heart" size={14} color={colors.success} />
+                <Text style={styles.miniBadgeText}>Pool discount applied</Text>
+              </View>
+            )}
+          </View>
+        )}
+
+        {poolInfo && poolInfo.count > 1 && (
+          <Card style={{ gap: spacing.sm }}>
+            <View style={styles.poolHeader}>
+              <MaterialCommunityIcons name="account-group" size={20} color={colors.brandPrimary} />
+              <Text style={styles.poolTitle}>Shared with {poolInfo.count} riders</Text>
+            </View>
+            {poolInfo.riders.map((r: any, i: number) => (
+              <View key={i} style={styles.poolRider}>
+                <Avatar name={r.passenger_name} size={32} />
+                <Text style={styles.poolRiderText} numberOfLines={1}>
+                  {r.passenger_name} • {r.pickup_name} → {r.drop_name}
+                </Text>
+              </View>
+            ))}
+          </Card>
+        )}
+
         {renderActions()}
       </ScrollView>
+
+      {order && (
+        <RazorpayCheckout
+          visible={rzpVisible}
+          order={order}
+          name={booking.passenger_name}
+          contact={booking.passenger_phone}
+          onSuccess={onRazorpaySuccess}
+          onClose={() => setRzpVisible(false)}
+        />
+      )}
 
       {/* Payment modal */}
       <Modal visible={showPay} transparent animationType="fade" onRequestClose={() => setShowPay(false)}>
@@ -339,7 +475,7 @@ export default function RideTracking() {
                 key={m.key}
                 testID={`pay-${m.key}`}
                 style={styles.payOption}
-                onPress={() => pay(m.key)}
+                onPress={() => payDemo(m.key)}
               >
                 <MaterialCommunityIcons name={m.icon as any} size={24} color={colors.brandPrimary} />
                 <Text style={styles.payOptionText}>{m.label}</Text>
@@ -459,6 +595,21 @@ const styles = StyleSheet.create({
   waitText: { fontFamily: fonts.text, fontSize: fontSize.base, color: colors.muted, textAlign: "center" },
   paidRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.sm },
   paidText: { fontFamily: fonts.text, fontSize: fontSize.base, fontWeight: "600", color: colors.success },
+  badgeRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
+  miniBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: colors.surfaceSecondary,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  miniBadgeText: { fontFamily: fonts.text, fontSize: fontSize.sm, fontWeight: "700", color: colors.onSurface },
+  poolHeader: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  poolTitle: { fontFamily: fonts.display, fontSize: fontSize.lg, fontWeight: "700", color: colors.onSurface },
+  poolRider: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  poolRiderText: { flex: 1, fontFamily: fonts.text, fontSize: fontSize.base, color: colors.onSurfaceSecondary },
   modalBg: { flex: 1, backgroundColor: "rgba(44,42,40,0.5)", justifyContent: "flex-end" },
   modalCard: {
     backgroundColor: colors.surface,

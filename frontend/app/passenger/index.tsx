@@ -8,16 +8,10 @@ import { colors, fonts, fontSize, radius, spacing, shadowSoft } from "@/src/them
 import { Button, Card } from "@/src/components/ui";
 import { RouteMap } from "@/src/components/RouteMap";
 import { VillageField } from "@/src/components/VillagePicker";
+import { ScheduleField, ScheduleValue, NOW_SCHEDULE } from "@/src/components/ScheduleField";
 import { useVillages, Village } from "@/src/hooks/useVillages";
 import { useAuth } from "@/src/auth/AuthContext";
 import { useToast } from "@/src/components/Toast";
-
-const TIME_OPTIONS = [
-  { label: "Now", mins: 0 },
-  { label: "In 30 min", mins: 30 },
-  { label: "In 1 hr", mins: 60 },
-  { label: "In 2 hrs", mins: 120 },
-];
 
 export default function PassengerHome() {
   const insets = useSafeAreaInsets();
@@ -28,7 +22,7 @@ export default function PassengerHome() {
 
   const [origin, setOrigin] = useState<Village | null>(null);
   const [dest, setDest] = useState<Village | null>(null);
-  const [timeIdx, setTimeIdx] = useState(0);
+  const [schedule, setSchedule] = useState<ScheduleValue>(NOW_SCHEDULE);
 
   const points = useMemo(() => {
     const pts: any[] = [];
@@ -46,10 +40,16 @@ export default function PassengerHome() {
       toast.show("Pickup and destination can't be same", "error");
       return;
     }
-    const dt = new Date(Date.now() + TIME_OPTIONS[timeIdx].mins * 60000).toISOString();
+    const dt = schedule.iso;
     router.push({
       pathname: "/passenger/matches",
-      params: { originId: origin.id, destId: dest.id, time: dt, timeLabel: TIME_OPTIONS[timeIdx].label },
+      params: {
+        originId: origin.id,
+        destId: dest.id,
+        time: dt,
+        timeLabel: schedule.label,
+        recurring: schedule.recurring ? "1" : "0",
+      },
     });
   };
 
@@ -92,28 +92,7 @@ export default function PassengerHome() {
           iconColor={colors.brandSecondary}
         />
 
-        <Text style={styles.label}>Departure time</Text>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ gap: spacing.sm, paddingRight: spacing.lg }}
-        >
-          {TIME_OPTIONS.map((t, i) => (
-            <Text
-              key={t.label}
-              testID={`time-option-${i}`}
-              onPress={() => setTimeIdx(i)}
-              style={[
-                styles.timeChip,
-                timeIdx === i
-                  ? { backgroundColor: colors.surfaceInverse, color: colors.onSurfaceInverse }
-                  : { backgroundColor: colors.surface, color: colors.onSurface, borderColor: colors.border, borderWidth: 1.5 },
-              ]}
-            >
-              {t.label}
-            </Text>
-          ))}
-        </ScrollView>
+        <ScheduleField label="Departure time" value={schedule} onChange={setSchedule} />
 
         <Button
           testID="find-rides-button"

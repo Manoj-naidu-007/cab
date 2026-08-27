@@ -8,17 +8,11 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { colors, fonts, fontSize, radius, spacing } from "@/src/theme";
 import { Button, Card } from "@/src/components/ui";
 import { VillageField } from "@/src/components/VillagePicker";
+import { ScheduleField, ScheduleValue, NOW_SCHEDULE } from "@/src/components/ScheduleField";
 import { useVillages, Village } from "@/src/hooks/useVillages";
 import { useAuth } from "@/src/auth/AuthContext";
 import { useToast } from "@/src/components/Toast";
 import { api } from "@/src/api";
-
-const TIME_OPTIONS = [
-  { label: "Now", mins: 0 },
-  { label: "In 30 min", mins: 30 },
-  { label: "In 1 hr", mins: 60 },
-  { label: "In 2 hrs", mins: 120 },
-];
 
 function haversine(a: Village, b: Village) {
   const R = 6371;
@@ -40,7 +34,7 @@ export default function DriverPublish() {
 
   const [origin, setOrigin] = useState<Village | null>(null);
   const [dest, setDest] = useState<Village | null>(null);
-  const [timeIdx, setTimeIdx] = useState(0);
+  const [schedule, setSchedule] = useState<ScheduleValue>(NOW_SCHEDULE);
   const [seats, setSeats] = useState(3);
   const [womenOnly, setWomenOnly] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -65,7 +59,7 @@ export default function DriverPublish() {
     }
     setLoading(true);
     try {
-      const dt = new Date(Date.now() + TIME_OPTIONS[timeIdx].mins * 60000).toISOString();
+      const dt = schedule.iso;
       await api.post("/rides", {
         origin_village_id: origin.id,
         dest_village_id: dest.id,
@@ -74,6 +68,7 @@ export default function DriverPublish() {
         seats_total: seats,
         vehicle_type: user?.vehicle_type || "Auto",
         women_only: womenOnly,
+        recurring: schedule.recurring,
       });
       toast.show("Return route published!", "success");
       setOrigin(null);
@@ -131,26 +126,7 @@ export default function DriverPublish() {
           iconColor={colors.brandSecondary}
         />
 
-        <Text style={styles.label}>Departure</Text>
-        <View style={styles.timeRow}>
-          {TIME_OPTIONS.map((t, i) => (
-            <Pressable
-              key={t.label}
-              testID={`driver-time-${i}`}
-              onPress={() => setTimeIdx(i)}
-              style={[
-                styles.timeChip,
-                timeIdx === i
-                  ? { backgroundColor: colors.surfaceInverse, borderColor: colors.surfaceInverse }
-                  : { borderColor: colors.border },
-              ]}
-            >
-              <Text style={[styles.timeText, { color: timeIdx === i ? colors.onSurfaceInverse : colors.onSurface }]}>
-                {t.label}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
+        <ScheduleField label="Departure" value={schedule} onChange={setSchedule} />
 
         <Text style={styles.label}>Seats available</Text>
         <View style={styles.seatRow}>

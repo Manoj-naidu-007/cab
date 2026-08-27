@@ -24,6 +24,9 @@ interface Match {
   leg_distance_km: number;
   one_way_fare: number;
   return_fare: number;
+  pool_fare: number;
+  others_joined: number;
+  is_shared: boolean;
   you_save: number;
   co2_saved_kg: number;
 }
@@ -37,6 +40,7 @@ export default function Matches() {
     destId: string;
     time: string;
     timeLabel: string;
+    recurring: string;
   }>();
 
   const [matches, setMatches] = useState<Match[]>([]);
@@ -76,6 +80,9 @@ export default function Matches() {
         drop_village_id: params.destId,
         seats: 1,
         payment_mode: "upi",
+        want_pool: true,
+        scheduled_time: params.time,
+        recurring: params.recurring === "1",
       });
       toast.show("Ride requested!", "success");
       router.replace({ pathname: "/ride/[id]", params: { id: b.id } });
@@ -167,6 +174,15 @@ export default function Matches() {
                 </View>
               </View>
 
+              {item.is_shared && (
+                <View style={styles.sharedBanner}>
+                  <MaterialCommunityIcons name="account-group" size={16} color={colors.success} />
+                  <Text style={styles.sharedText}>
+                    Shared ride • {item.others_joined} joined — extra pool discount applied
+                  </Text>
+                </View>
+              )}
+
               <View style={styles.infoGrid}>
                 <InfoBit icon="clock-outline" label="Departs" value={timeStr(item.departure_time)} />
                 <InfoBit icon="seat-passenger" label="Seats" value={`${item.seats_available} left`} />
@@ -176,7 +192,7 @@ export default function Matches() {
               <View style={styles.fareRow}>
                 <View>
                   <Text style={styles.strike}>₹{item.one_way_fare}</Text>
-                  <Text style={styles.fare}>₹{item.return_fare}</Text>
+                  <Text style={styles.fare}>₹{item.is_shared ? item.pool_fare : item.return_fare}</Text>
                 </View>
                 <View style={styles.saveBadge}>
                   <MaterialCommunityIcons name="tag" size={14} color={colors.success} />
@@ -258,4 +274,15 @@ const styles = StyleSheet.create({
   fare: { fontFamily: fonts.display, fontSize: fontSize["2xl"], fontWeight: "800", color: colors.brandPrimary },
   saveBadge: { flexDirection: "row", alignItems: "center", gap: 3 },
   saveText: { fontFamily: fonts.text, fontSize: fontSize.base, fontWeight: "700", color: colors.success },
+  sharedBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: "#DCE6DC",
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    marginTop: spacing.md,
+  },
+  sharedText: { flex: 1, fontFamily: fonts.text, fontSize: fontSize.base, color: colors.success, fontWeight: "600" },
 });
